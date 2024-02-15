@@ -1,0 +1,176 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"fsharp","items":[{"aliases":[],"languageName":"fsharp","name":"fsharp"}]}}
+
+#!markdown
+
+# FSharp.Data.Adaptive: adaptive data for F#
+
+#!fsharp
+
+#r "nuget: FSharp.Data.Adaptive, 1.2.14"
+
+open FSharp.Data.Adaptive
+
+#!markdown
+
+This library provides a simple yet powerful way to write incremental functional computations that can be connected to imperative sources on both input and output.
+
+Examples include:
+
+* adaptive views in data-driven user interfaces
+
+* adaptive computations in incremental data-driven scientific and financial models
+
+`FSharp.Data.Adaptive` focuses on 'adaptive values' and 'adaptive data' rather than reactive events.
+
+#!markdown
+
+## Adaptive Values
+
+#!markdown
+
+Adaptive values (`aval`) are similar to cells in Excel spreadsheets. Consider a physics simulation such as the time taken for a ball to fall from a particular height. If you like think of `sqrt (2.0 * height / gravity)` as a formula in an Excel spreadsheet, where `height` and `gravity` are the names of other cells. The functional and adaptive forms are:
+
+#!fsharp
+
+// functional form
+let timeToFloor (height: float) (gravity: float) : float =
+    sqrt (2.0 * height / gravity)
+
+// adaptive form
+let adaptiveTimeToFloor (height: aval<float>) (gravity: aval<float>) : aval<float> =
+    AVal.map2 (fun h g -> sqrt (2.0 * h / g)) height gravity
+
+#!markdown
+
+The `AVal.map2` is glue to connect this formula to other cells, producing a new cell.
+
+Now let's define the cells `height` and `gravity`, make them changeable (`cval`), that is, user-editable. Initially the inputs contain the values on Earth:
+
+#!fsharp
+
+let height  = cval 10.0
+let gravity = cval 9.81
+let dropTime = adaptiveTimeToFloor height gravity
+
+#!markdown
+
+We can now observe the result of the output 'cell':
+
+#!fsharp
+
+AVal.force dropTime
+
+#!markdown
+
+The user (or something else in the system) can now adjusts the changeable inputs to the values for the moon:
+
+#!fsharp
+
+transact (fun _ -> gravity.Value <- 1.62)
+
+AVal.force dropTime
+
+#!markdown
+
+And now adjust to a height of 2000m on Jupiter:
+
+#!fsharp
+
+transact (fun _ ->
+    gravity.Value <- 24.79
+    height.Value <- 2000.0
+)
+
+AVal.force dropTime
+
+#!markdown
+
+This example feels a lot like an Excel calculation, in which dependent cells get updated whenever changeable inputs change. Some important differences are
+
+1. All 'cells' are adaptive values
+
+2. 'Cells' are first-class values
+3. Changeable 'cells' are distinguished from computed
+4. In the above, each 'cell' gets named explcitly in program code, rather than using implicit naming on a sheet
+5. Some glue like `AVal.map2` is needed to connect cells
+6. User code is responsible for making changes using `transact`
+7. Re-calc happens on-demand as outputs are observed
+
+#!markdown
+
+Some API elements you have seen so far are:
+
+* `aval` Adaptive Value. Adaptive cell whose value purely depends on other adaptive cells.
+
+* `map` `map2` `map3` Create a new `aval` whose value depends on the one (two, three) input `aval`(s).
+
+* `cval` Changeable Value. Adaptive cell whose value can be manually set. A `cval` is also an `aval`.
+
+* `transact` Set a `cval`'s value within this scope.
+
+* `force` Read an `aval`'s value.
+
+#!markdown
+
+## Adaptive Collections
+
+#!markdown
+
+Cells in an Excel spreadsheet can only contain an individual value. What if a 'cell' could be an entire set, array, list or table? And what if the user makes incremental modifications to such a cell, adding a row, deleting a selection of elements and so on? Would the rest of the spreadsheet adjust to this incremental change in the collection, or would dependent cells recalculate over the entire new collection?
+
+As seen in the examples above `aval<'T>` and `cval<'T>` are containers for single values that may change adaptively. A natural way of handling collections of values would be `aval<Set<'T>>`. However, this forces recalculation by iterating the entire collection. For example, a mapping function on the set would look like this:
+
+#!fsharp
+
+let map (mapping: 'T1 -> 'T2) (set : aval<Set<'T1>>) : aval<Set<'T2>> =
+    set |> AVal.map (Set.map mapping)
+
+#!markdown
+
+Note the use of `Set.map` means that mapping will be executed for all elements of the set even if just a single element changes.
+
+Instead, you use adaptive collections:
+
+* `cset`/`ChangeableHashSet` Adaptive modifiable input set.
+
+* `aset`/`AdaptiveHashSet` Adaptive set. Content depends on other adaptive cells.
+
+Adaptive sets work on *deltas* instead of values. Here's an example illustrating `aset`s:
+
+#!fsharp
+
+let inputSet = cset [1;2;3]
+
+// output to stdout the contents of set; double each value
+let dependentSet : aset<int> =
+    inputSet |> ASet.map (fun (v: int) -> printf "map %d, " v; v * 2)
+
+printfn "%A" (AVal.force dependentSet.Content)
+
+#!markdown
+
+We create an `aset` and specify a mapping function on the elements. The mapping is evaluated for each element individually, as illustrated by the three "map" prints.
+
+Let's add an element to the set.
+
+#!fsharp
+
+transact (fun _ -> inputSet.Add 0)
+printfn "%A" (AVal.force dependentSet.Content)
+
+#!markdown
+
+The mapping function is evaluated **only once**, for the newly added element! `aset` is an *incremental* data structure on the level of its contained elements.
+
+#!fsharp
+
+transact (fun _ -> inputSet.Remove 2)
+printfn "%A" (AVal.force dependentSet.Content)
+
+#!markdown
+
+There is no "map" print - the removal did not trigger an evaluation of the mapping function!
+
+In addition to the unordered set, we also have implementations of the ordered list, called `alist`, and the key-value map, called `amap`.
